@@ -13,3 +13,5 @@ bin
 launchSettings.json
 .DS_Store
 TestResults/
+# Endfield key material (local only, never commit)
+endfield.keys.json
