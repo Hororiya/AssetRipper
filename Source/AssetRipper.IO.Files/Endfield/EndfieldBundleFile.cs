@@ -21,6 +21,9 @@ public sealed class EndfieldBundleFile : FileContainer
 	public IReadOnlyList<EndfieldStorageBlock> Blocks { get; private set; } = [];
 	public IReadOnlyList<EndfieldNode> Nodes { get; private set; } = [];
 
+	/// <summary>Set once any Endfield bundle has been decoded; enables type tree transcoding of its modified engine classes.</summary>
+	public static bool AnyLoaded { get; private set; }
+
 	/// <summary>True when the first 8 bytes at the stream position are an Endfield bundle signature.</summary>
 	public static bool IsEndfieldBundle(SmartStream stream)
 	{
@@ -55,6 +58,7 @@ public sealed class EndfieldBundleFile : FileContainer
 			throw new InvalidDataException($"Not an Endfield bundle: {NameFixed}");
 		}
 		Header = EndfieldBundleHeader.Parse(head);
+		AnyLoaded = true;
 
 		long fixedOffset = Header.EncFlags >= 7 ? 48 : 40;
 		long blocksInfoOffset = Header.BlocksInfoAtTheEnd ? (long)(uint)Header.Size - Header.CompressedBlocksInfoSize : fixedOffset;

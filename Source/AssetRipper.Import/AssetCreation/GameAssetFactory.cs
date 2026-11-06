@@ -62,6 +62,10 @@ public sealed class GameAssetFactory : AssetFactoryBase
 		}
 		else
 		{
+			if (TypeTreeTranscoder.TryTranscode(assetInfo, assetData, assetType, assetInfo.Collection.Version, out byte[] transcoded))
+			{
+				assetData = new ReadOnlyArraySegment<byte>(transcoded);
+			}
 			return ReadNormalObject(assetInfo, assetData);
 		}
 	}

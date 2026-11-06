@@ -103,6 +103,7 @@
   <Project Path="Source/AssetRipper.Tools.CabMapGenerator/AssetRipper.Tools.CabMapGenerator.csproj" />
   <Project Path="Source/AssetRipper.Tools.DependenceGrapher/AssetRipper.Tools.DependenceGrapher.csproj" />
   <Project Path="Source/AssetRipper.Tools.FileExtractor/AssetRipper.Tools.FileExtractor.csproj" />
+  <Project Path="Source/AssetRipper.Tools.EndfieldImport/AssetRipper.Tools.EndfieldImport.csproj" />
   <Project Path="Source/AssetRipper.Tools.EndfieldVfs/AssetRipper.Tools.EndfieldVfs.csproj" />
   <Project Path="Source/AssetRipper.Tools.JsonSerializer/AssetRipper.Tools.JsonSerializer.csproj" />
   <Project Path="Source/AssetRipper.Tools.MonoBehaviourTester/AssetRipper.Tools.MonoBehaviourTester.csproj" />

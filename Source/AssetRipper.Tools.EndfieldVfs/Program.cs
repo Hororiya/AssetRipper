@@ -28,14 +28,14 @@ internal static class Program
 		{
 			"catalog" => Catalog(vfs, ms, Option(args, "--tsv")),
 			"find" => Find(vfs, args.Skip(2)),
-			"dump" => Dump(vfs, keys, args.Skip(2).Where(a => !a.StartsWith("--")).ToArray(), Option(args, "--out")),
+			"extract" => Extract(vfs, keys, Positional(args), Option(args, "--out")),
+			"dump" => Dump(vfs, keys, Positional(args), Option(args, "--out")),
 			_ => 2,
 		};
 	}
 
-	// dump <game dir> <virtual name | AnimeStudio load-list.json>... [--out dir]
-	// Decodes each bundle; per node prints "<chunk>+<offset>  <node>  <size>  <sha256>  <parse result>".
-	private static int Dump(AssetRipper.IO.Files.Endfield.EndfieldVfs vfs, EndfieldKeys keys, string[] inputs, string? outDir)
+	// virtual names, or AnimeStudio load lists (*.json with Source + Offset), resolved to virtual files
+	private static List<BlcVirtualFile> ResolveTargets(AssetRipper.IO.Files.Endfield.EndfieldVfs vfs, string[] inputs)
 	{
 		Dictionary<(string, long), BlcVirtualFile> byLocation = new();
 		foreach (BlcVirtualFile f in vfs.Catalogs.Values.SelectMany(c => c.Files))
@@ -67,6 +67,34 @@ internal static class Program
 				targets.Add(vfs.Find(input) ?? throw new FileNotFoundException($"No virtual file '{input}'."));
 			}
 		}
+		return targets.Distinct().ToList();
+	}
+
+	// extract <game dir> <virtual name | load-list.json>... --out dir: raw virtual-file bytes (decrypted if ChaCha-encrypted)
+	private static int Extract(AssetRipper.IO.Files.Endfield.EndfieldVfs vfs, EndfieldKeys keys, string[] inputs, string? outDir)
+	{
+		if (outDir is null)
+		{
+			Console.Error.WriteLine("extract needs --out <dir>");
+			return 2;
+		}
+		foreach (BlcVirtualFile file in ResolveTargets(vfs, inputs))
+		{
+			string path = Path.Combine(outDir, file.Name.Replace('/', Path.DirectorySeparatorChar));
+			Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+			using AssetRipper.IO.Files.Streams.Smart.SmartStream s = AssetRipper.IO.Files.Endfield.EndfieldVfs.OpenStream(file, keys);
+			using FileStream o = File.Create(path);
+			s.CopyTo(o);
+			Console.WriteLine($"{file.Name}	{o.Length}");
+		}
+		return 0;
+	}
+
+	// dump <game dir> <virtual name | AnimeStudio load-list.json>... [--out dir]
+	// Decodes each bundle; per node prints "<chunk>+<offset>  <node>  <size>  <sha256>  <parse result>".
+	private static int Dump(AssetRipper.IO.Files.Endfield.EndfieldVfs vfs, EndfieldKeys keys, string[] inputs, string? outDir)
+	{
+		List<BlcVirtualFile> targets = ResolveTargets(vfs, inputs);
 		int failures = 0;
 		Stopwatch sw = Stopwatch.StartNew();
 		foreach (BlcVirtualFile file in targets.Distinct())
@@ -140,6 +168,24 @@ internal static class Program
 			}
 		}
 		return 0;
+	}
+
+	// arguments after the game dir, without "--flag" and the values of --out / --tsv
+	private static string[] Positional(string[] args)
+	{
+		List<string> result = new();
+		for (int i = 2; i < args.Length; i++)
+		{
+			if (args[i] is "--out" or "--tsv")
+			{
+				i++;
+			}
+			else if (!args[i].StartsWith("--"))
+			{
+				result.Add(args[i]);
+			}
+		}
+		return result.ToArray();
 	}
 
 	private static string? Option(string[] args, string name)
