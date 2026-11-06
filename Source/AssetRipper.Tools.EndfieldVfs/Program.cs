@@ -28,8 +28,97 @@ internal static class Program
 		{
 			"catalog" => Catalog(vfs, ms, Option(args, "--tsv")),
 			"find" => Find(vfs, args.Skip(2)),
+			"dump" => Dump(vfs, keys, args.Skip(2).Where(a => !a.StartsWith("--")).ToArray(), Option(args, "--out")),
 			_ => 2,
 		};
+	}
+
+	// dump <game dir> <virtual name | AnimeStudio load-list.json>... [--out dir]
+	// Decodes each bundle; per node prints "<chunk>+<offset>  <node>  <size>  <sha256>  <parse result>".
+	private static int Dump(AssetRipper.IO.Files.Endfield.EndfieldVfs vfs, EndfieldKeys keys, string[] inputs, string? outDir)
+	{
+		Dictionary<(string, long), BlcVirtualFile> byLocation = new();
+		foreach (BlcVirtualFile f in vfs.Catalogs.Values.SelectMany(c => c.Files))
+		{
+			byLocation[(f.Chunk.Md5Name, f.Offset)] = f;
+		}
+		List<BlcVirtualFile> targets = new();
+		foreach (string input in inputs)
+		{
+			if (input.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+			{
+				using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(input));
+				foreach (System.Text.Json.JsonElement item in doc.RootElement.EnumerateArray())
+				{
+					string chunk = Path.GetFileNameWithoutExtension(item.GetProperty("Source").GetString()!).ToUpperInvariant();
+					long offset = item.GetProperty("Offset").GetInt64();
+					if (byLocation.TryGetValue((chunk, offset), out BlcVirtualFile? f))
+					{
+						targets.Add(f);
+					}
+					else
+					{
+						Console.WriteLine($"{chunk}+{offset}: no virtual file starts here");
+					}
+				}
+			}
+			else
+			{
+				targets.Add(vfs.Find(input) ?? throw new FileNotFoundException($"No virtual file '{input}'."));
+			}
+		}
+		int failures = 0;
+		Stopwatch sw = Stopwatch.StartNew();
+		foreach (BlcVirtualFile file in targets.Distinct())
+		{
+			AssetRipper.IO.Files.FileBase loaded;
+			try
+			{
+				loaded = AssetRipper.IO.Files.Endfield.EndfieldVfs.Load(file, keys);
+			}
+			catch (Exception ex)
+			{
+				failures++;
+				Console.WriteLine($"{file.Chunk.Md5Name}+{file.Offset}\t{file.Name}\tFAILED {ex.GetType().Name}: {ex.Message}");
+				continue;
+			}
+			if (loaded is not EndfieldBundleFile bundle)
+			{
+				Console.WriteLine($"{file.Chunk.Md5Name}+{file.Offset}\t{file.Name}\tnot an Endfield bundle ({loaded.GetType().Name})");
+				continue;
+			}
+			foreach (AssetRipper.IO.Files.FailedFile failed in bundle.FailedFiles)
+			{
+				failures++;
+				Console.WriteLine($"{file.Chunk.Md5Name}+{file.Offset}\t{failed.Name}\tFAILED {failed.StackTrace}");
+			}
+			foreach (AssetRipper.IO.Files.ResourceFiles.ResourceFile node in bundle.ResourceFiles.ToArray())
+			{
+				byte[] bytes = node.ToByteArray();
+				string sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+				string parsed;
+				try
+				{
+					AssetRipper.IO.Files.FileBase inner = AssetRipper.IO.Files.SchemeReader.ReadFile(bytes, file.Name, node.Name);
+					parsed = inner is AssetRipper.IO.Files.SerializedFiles.SerializedFile sf
+						? $"SerializedFile {sf.Version} format {sf.Generation} objects {sf.Objects.Length} types {sf.Types.Length} typetree {sf.HasTypeTree}"
+						: inner.GetType().Name;
+				}
+				catch (Exception ex)
+				{
+					failures++;
+					parsed = $"PARSE FAILED {ex.GetType().Name}: {ex.Message}";
+				}
+				Console.WriteLine($"{file.Chunk.Md5Name}+{file.Offset}\t{node.Name}\t{bytes.Length}\t{sha}\t{parsed}");
+				if (outDir is not null)
+				{
+					Directory.CreateDirectory(outDir);
+					File.WriteAllBytes(Path.Combine(outDir, node.Name), bytes);
+				}
+			}
+		}
+		Console.Error.WriteLine($"dumped {targets.Distinct().Count()} bundles in {sw.ElapsedMilliseconds} ms, {failures} failures");
+		return failures == 0 ? 0 : 1;
 	}
 
 	// blcdump <.blc|dir> [out dir]: version survey; with an out dir, also writes each decrypted body (<group>.v<N>.bin)

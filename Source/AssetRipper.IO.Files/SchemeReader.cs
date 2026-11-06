@@ -4,6 +4,7 @@ using AssetRipper.IO.Files.BundleFiles.RawWeb.Raw;
 using AssetRipper.IO.Files.BundleFiles.RawWeb.Web;
 using AssetRipper.IO.Files.CompressedFiles.Brotli;
 using AssetRipper.IO.Files.CompressedFiles.GZip;
+using AssetRipper.IO.Files.Endfield;
 using AssetRipper.IO.Files.ResourceFiles;
 using AssetRipper.IO.Files.SerializedFiles;
 using AssetRipper.IO.Files.Streams;
@@ -24,6 +25,7 @@ public static class SchemeReader
 		new WebBundleScheme(),
 		new RawBundleScheme(),
 		new FileStreamBundleScheme(),
+		new EndfieldBundleScheme(),
 	};
 
 	public static FileBase LoadFile(string filePath, FileSystem fileSystem)

@@ -1,3 +1,5 @@
+using AssetRipper.IO.Files.Streams.Smart;
+
 namespace AssetRipper.IO.Files.Endfield;
 
 /// <summary>
@@ -74,6 +76,36 @@ public sealed class EndfieldVfs
 	public BlcVirtualFile? Find(string name)
 	{
 		return Files.TryGetValue(NormalizeName(name), out BlcVirtualFile[]? found) ? found[^1] : null;
+	}
+
+	/// <summary>
+	/// The raw bytes of a virtual file. Plain files are a zero-copy slice of their .chk; ChaCha20-encrypted ones
+	/// (nonce = u32 3 + i64 ivSeed, counter 1) are decrypted into memory.
+	/// </summary>
+	public static SmartStream OpenStream(BlcVirtualFile file, EndfieldKeys keys)
+	{
+		string chunk = file.Chunk.PhysicalPath ?? throw new FileNotFoundException(
+			$"Chunk {file.Chunk.Catalog.GroupId}/{file.Chunk.Md5Name}.chk of '{file.Name}' is not installed.");
+		using SmartStream source = SmartStream.OpenRead(chunk, LocalFileSystem.Instance);
+		if (!file.Encrypted)
+		{
+			return source.CreatePartial(file.Offset, file.Length);
+		}
+		byte[] data = new byte[checked((int)file.Length)];
+		source.Position = file.Offset;
+		source.ReadExactly(data);
+		Span<byte> nonce = stackalloc byte[12];
+		System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(nonce, 3u);
+		System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(nonce[4..], file.IvSeed ?? 0);
+		ChaCha20.Xor(data, keys.BlcChaCha20Key, nonce, 1);
+		return SmartStream.CreateMemory(data, 0, data.Length, false);
+	}
+
+	/// <summary>Reads a virtual file through <see cref="SchemeReader"/> (an Endfield bundle becomes an <see cref="EndfieldBundleFile"/>).</summary>
+	public static FileBase Load(BlcVirtualFile file, EndfieldKeys keys)
+	{
+		SmartStream stream = OpenStream(file, keys);
+		return SchemeReader.ReadFile(stream, file.Name, System.IO.Path.GetFileName(file.Name));
 	}
 
 	private static string? ResolveChunk(BlcChunk chunk, string? persistent, string streaming)
