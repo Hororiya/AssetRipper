@@ -29,6 +29,8 @@ internal static class Program
 			"catalog" => Catalog(vfs, ms, Option(args, "--tsv")),
 			"find" => Find(vfs, args.Skip(2)),
 			"extract" => Extract(vfs, keys, Positional(args), Option(args, "--out")),
+			"cabindex" => CabIndexCommand(vfs, keys, Option(args, "--index")),
+			"deps" => Deps(vfs, keys, Positional(args), Option(args, "--index"), Option(args, "--out"), Option(args, "--list")),
 			"dump" => Dump(vfs, keys, Positional(args), Option(args, "--out")),
 			_ => 2,
 		};
@@ -86,6 +88,80 @@ internal static class Program
 			using FileStream o = File.Create(path);
 			s.CopyTo(o);
 			Console.WriteLine($"{file.Name}	{o.Length}");
+		}
+		return 0;
+	}
+
+	// cabindex <game dir> [--index cache.tsv]: CAB name -> bundle, from bundle directories only
+	private static int CabIndexCommand(AssetRipper.IO.Files.Endfield.EndfieldVfs vfs, EndfieldKeys keys, string? cache)
+	{
+		EndfieldCabIndex index = EndfieldCabIndex.LoadOrBuild(vfs, keys, cache, Console.WriteLine);
+		Console.WriteLine($"{index.Cabs.Count} CABs in {index.Cabs.Values.Distinct().Count()} bundles");
+		return 0;
+	}
+
+	// deps <game dir> <virtual name | load-list.json>... [--index cache.tsv] [--list out.txt] [--out dir]
+	// Dependency closure: decode each bundle, follow its serialized files' external references through the CAB index.
+	// --list writes the closure's virtual names; --out extracts the raw bundles.
+	private static int Deps(AssetRipper.IO.Files.Endfield.EndfieldVfs vfs, EndfieldKeys keys, string[] inputs, string? cache, string? outDir, string? listPath)
+	{
+		EndfieldCabIndex index = EndfieldCabIndex.LoadOrBuild(vfs, keys, cache, Console.WriteLine);
+		Queue<BlcVirtualFile> queue = new(ResolveTargets(vfs, inputs));
+		HashSet<BlcVirtualFile> closure = new(queue);
+		SortedSet<string> missing = new(StringComparer.Ordinal);
+		int builtin = 0;
+		while (queue.Count > 0)
+		{
+			BlcVirtualFile file = queue.Dequeue();
+			if (AssetRipper.IO.Files.Endfield.EndfieldVfs.Load(file, keys) is not AssetRipper.IO.Files.FileContainer bundle)
+			{
+				continue;
+			}
+			bundle.ReadContents();
+			foreach (AssetRipper.IO.Files.SerializedFiles.SerializedFile serialized in bundle.SerializedFiles)
+			{
+				foreach (AssetRipper.IO.Files.SerializedFiles.Parser.FileIdentifier dependency in serialized.Dependencies)
+				{
+					string name = Path.GetFileName(dependency.PathNameOrigin ?? dependency.PathName).ToLowerInvariant();
+					if (name is "unity default resources" or "unity_builtin_extra" or "unity builtin extra" || name.StartsWith("library/"))
+					{
+						builtin++;
+						continue;
+					}
+					if (index.Find(name) is { } next)
+					{
+						if (closure.Add(next))
+						{
+							queue.Enqueue(next);
+						}
+					}
+					else
+					{
+						missing.Add(name);
+					}
+				}
+			}
+		}
+		Console.WriteLine($"closure: {closure.Count} bundles ({inputs.Length} inputs), {missing.Count} unresolved CAB names, {builtin} builtin references");
+		foreach (string m in missing.Take(20))
+		{
+			Console.WriteLine($"  unresolved {m}");
+		}
+		if (listPath is not null)
+		{
+			File.WriteAllLines(listPath, closure.Select(f => f.Name).Order(StringComparer.Ordinal));
+		}
+		if (outDir is not null)
+		{
+			foreach (BlcVirtualFile file in closure)
+			{
+				string path = Path.Combine(outDir, file.Name.Replace('/', Path.DirectorySeparatorChar));
+				Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+				using AssetRipper.IO.Files.Streams.Smart.SmartStream s = AssetRipper.IO.Files.Endfield.EndfieldVfs.OpenStream(file, keys);
+				using FileStream o = File.Create(path);
+				s.CopyTo(o);
+			}
+			Console.WriteLine($"extracted {closure.Count} bundles to {outDir}");
 		}
 		return 0;
 	}
@@ -176,7 +252,7 @@ internal static class Program
 		List<string> result = new();
 		for (int i = 2; i < args.Length; i++)
 		{
-			if (args[i] is "--out" or "--tsv")
+			if (args[i] is "--out" or "--tsv" or "--index" or "--list")
 			{
 				i++;
 			}

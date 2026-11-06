@@ -51,44 +51,12 @@ public sealed class EndfieldBundleFile : FileContainer
 	{
 		long basePosition = stream.Position;
 		VfsCipher cipher = VfsCipher.FromKeys(EndfieldKeys.Load());
-
-		byte[] head = ReadExactly(stream, EndfieldBundleHeader.Length);
-		if (!IsSignature(head))
-		{
-			throw new InvalidDataException($"Not an Endfield bundle: {NameFixed}");
-		}
-		Header = EndfieldBundleHeader.Parse(head);
+		(EndfieldBundleHeader header, List<EndfieldStorageBlock> blocks, List<EndfieldNode> nodes, long dataOffset) = ReadMetadata(stream, cipher, NameFixed);
+		Header = header;
+		Blocks = blocks;
+		Nodes = nodes;
 		AnyLoaded = true;
 
-		long fixedOffset = Header.EncFlags >= 7 ? 48 : 40;
-		long blocksInfoOffset = Header.BlocksInfoAtTheEnd ? (long)(uint)Header.Size - Header.CompressedBlocksInfoSize : fixedOffset;
-		stream.Position = basePosition + blocksInfoOffset;
-		byte[] blocksInfo = ReadExactly(stream, checked((int)Header.CompressedBlocksInfoSize));
-		if ((Header.Flags & 0x3F) != 0)
-		{
-			cipher.DecryptSparse(blocksInfo);
-			byte[] uncompressed = new byte[Header.UncompressedBlocksInfoSize];
-			int written = LZ4Codec.Decode(blocksInfo, uncompressed);
-			if (written != uncompressed.Length)
-			{
-				throw new InvalidDataException($"Blocks-info LZ4 wrote {written} of {uncompressed.Length} bytes: {NameFixed}");
-			}
-			blocksInfo = uncompressed;
-		}
-		int cursor = 0;
-		Blocks = ReadBlocks(blocksInfo, ref cursor);
-		Nodes = ReadNodes(blocksInfo, ref cursor);
-
-		long dataOffset = fixedOffset;
-		if (!Header.BlocksInfoAtTheEnd)
-		{
-			long infoSize = Header.CompressedBlocksInfoSize;
-			if (Header.BlockInfoNeedPaddingAtStart)
-			{
-				infoSize = (infoSize + 15) & ~15L;
-			}
-			dataOffset += infoSize;
-		}
 		stream.Position = basePosition + dataOffset;
 		byte[] data = DecodeBlocks(stream, cipher);
 
@@ -105,6 +73,55 @@ public sealed class EndfieldBundleFile : FileContainer
 	}
 
 	public override void Write(Stream stream) => throw new NotSupportedException("Writing Endfield bundles is not supported.");
+
+	/// <summary>Reads only the directory (node names, offsets, sizes) of the bundle at the stream position; data blocks are not decoded.</summary>
+	public static IReadOnlyList<EndfieldNode> ReadNodeList(SmartStream stream, EndfieldKeys keys)
+	{
+		return ReadMetadata(stream, VfsCipher.FromKeys(keys), "bundle").Nodes;
+	}
+
+	/// <summary>Header, storage blocks, directory, and the data offset relative to the bundle start.</summary>
+	private static (EndfieldBundleHeader Header, List<EndfieldStorageBlock> Blocks, List<EndfieldNode> Nodes, long DataOffset) ReadMetadata(SmartStream stream, VfsCipher cipher, string name)
+	{
+		long basePosition = stream.Position;
+		byte[] head = ReadExactly(stream, EndfieldBundleHeader.Length);
+		if (!IsSignature(head))
+		{
+			throw new InvalidDataException($"Not an Endfield bundle: {name}");
+		}
+		EndfieldBundleHeader header = EndfieldBundleHeader.Parse(head);
+
+		long fixedOffset = header.EncFlags >= 7 ? 48 : 40;
+		long blocksInfoOffset = header.BlocksInfoAtTheEnd ? (long)(uint)header.Size - header.CompressedBlocksInfoSize : fixedOffset;
+		stream.Position = basePosition + blocksInfoOffset;
+		byte[] blocksInfo = ReadExactly(stream, checked((int)header.CompressedBlocksInfoSize));
+		if ((header.Flags & 0x3F) != 0)
+		{
+			cipher.DecryptSparse(blocksInfo);
+			byte[] uncompressed = new byte[header.UncompressedBlocksInfoSize];
+			int written = LZ4Codec.Decode(blocksInfo, uncompressed);
+			if (written != uncompressed.Length)
+			{
+				throw new InvalidDataException($"Blocks-info LZ4 wrote {written} of {uncompressed.Length} bytes: {name}");
+			}
+			blocksInfo = uncompressed;
+		}
+		int cursor = 0;
+		List<EndfieldStorageBlock> blocks = ReadBlocks(blocksInfo, ref cursor);
+		List<EndfieldNode> nodes = ReadNodes(blocksInfo, ref cursor);
+
+		long dataOffset = fixedOffset;
+		if (!header.BlocksInfoAtTheEnd)
+		{
+			long infoSize = header.CompressedBlocksInfoSize;
+			if (header.BlockInfoNeedPaddingAtStart)
+			{
+				infoSize = (infoSize + 15) & ~15L;
+			}
+			dataOffset += infoSize;
+		}
+		return (header, blocks, nodes, dataOffset);
+	}
 
 	private byte[] DecodeBlocks(SmartStream stream, VfsCipher cipher)
 	{

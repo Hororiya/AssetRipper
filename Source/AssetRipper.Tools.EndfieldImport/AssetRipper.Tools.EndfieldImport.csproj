@@ -9,6 +9,8 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\AssetRipper.Import\AssetRipper.Import.csproj" />
+		<ProjectReference Include="..\AssetRipper.Processing\AssetRipper.Processing.csproj" />
+		<ProjectReference Include="..\AssetRipper.Export.Modules.Models\AssetRipper.Export.Modules.Models.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>

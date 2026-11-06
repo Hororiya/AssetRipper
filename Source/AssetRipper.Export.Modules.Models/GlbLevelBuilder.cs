@@ -12,6 +12,7 @@ using AssetRipper.SourceGenerated.Classes.ClassID_25;
 using AssetRipper.SourceGenerated.Classes.ClassID_28;
 using AssetRipper.SourceGenerated.Classes.ClassID_33;
 using AssetRipper.SourceGenerated.Classes.ClassID_4;
+using AssetRipper.SourceGenerated.Classes.ClassID_137;
 using AssetRipper.SourceGenerated.Classes.ClassID_43;
 using AssetRipper.SourceGenerated.Extensions;
 using AssetRipper.SourceGenerated.Subclasses.PPtr_Material;
@@ -22,6 +23,7 @@ using SharpGLTF.Materials;
 using SharpGLTF.Memory;
 using SharpGLTF.Scenes;
 using System.Buffers;
+using System.Numerics;
 
 namespace AssetRipper.Export.Modules.Models;
 
@@ -41,6 +43,7 @@ public static class GlbLevelBuilder
 				IGameObject root = GetRoot(asset);
 
 				AddGameObjectToScene(sceneBuilder, parameters, null, Transformation.Identity, Transformation.Identity, root.GetTransform());
+				AddSkinnedMeshesToScene(sceneBuilder, parameters);
 
 				foreach (IEditorExtension exportedAsset in root.FetchHierarchy())
 				{
@@ -66,6 +69,7 @@ public static class GlbLevelBuilder
 		Transformation globalInverseTransform = parentGlobalInverseTransform * localInverseTransform;
 
 		NodeBuilder node = parentNode is null ? new NodeBuilder(gameObject.Name) : parentNode.CreateNode(gameObject.Name);
+		parameters.Nodes[transform] = node;
 		if (parentNode is not null || parameters.IsScene)
 		{
 			node.LocalTransform = new SharpGLTF.Transforms.AffineTransform(
@@ -95,10 +99,61 @@ public static class GlbLevelBuilder
 			}
 		}
 
+		else if (gameObject.TryGetComponent(out ISkinnedMeshRenderer? skinnedRenderer)
+			&& skinnedRenderer.MeshP is { } skinnedMesh
+			&& skinnedMesh.IsSet()
+			&& parameters.TryGetOrMakeMeshData(skinnedMesh, out MeshData skinnedMeshData))
+		{
+			// Skinned meshes need every joint node, so they are added once the whole hierarchy exists.
+			parameters.PendingSkinned.Add((node, skinnedRenderer, skinnedMesh, skinnedMeshData));
+		}
+
 		foreach (ITransform childTransform in transform.Children_C4P.WhereNotNull())
 		{
 			AddGameObjectToScene(sceneBuilder, parameters, node, localTransform * parentGlobalTransform, parentGlobalInverseTransform * localInverseTransform, childTransform);
 		}
+	}
+
+	/// <summary>
+	/// Skinned renderers: joints are the renderer's bone nodes, inverse bind matrices are the mesh bind poses converted to
+	/// glTF space (X mirrored on both sides). Meshes without bones or bind poses are exported rigid at their node.
+	/// </summary>
+	private static void AddSkinnedMeshesToScene(SceneBuilder sceneBuilder, BuildParameters parameters)
+	{
+		foreach ((NodeBuilder node, ISkinnedMeshRenderer renderer, IMesh mesh, MeshData meshData) in parameters.PendingSkinned)
+		{
+			AccessListBase<ISubMesh> subMeshes = mesh.SubMeshes;
+			MaterialList materials = new(renderer);
+			(ISubMesh, MaterialBuilder)[] subMeshArray = new (ISubMesh, MaterialBuilder)[subMeshes.Count];
+			for (int i = 0; i < subMeshes.Count; i++)
+			{
+				subMeshArray[i] = (subMeshes[i], parameters.GetOrMakeMaterial(materials[i]));
+			}
+			IMeshBuilder<MaterialBuilder> meshBuilder = GlbSubMeshBuilder.BuildSubMeshes(subMeshArray, mesh.Is16BitIndices(), meshData, Transformation.Identity, Transformation.Identity);
+
+			ITransform?[] bones = renderer.BonesP.ToArray();
+			if (bones.Length == 0 || mesh.BindPose.Count < bones.Length || meshData.Skin is null)
+			{
+				sceneBuilder.AddRigidMesh(meshBuilder, node);
+				continue;
+			}
+			(NodeBuilder Joint, Matrix4x4 InverseBindMatrix)[] joints = new (NodeBuilder, Matrix4x4)[bones.Length];
+			for (int i = 0; i < bones.Length; i++)
+			{
+				NodeBuilder joint = bones[i] is { } bone && parameters.Nodes.TryGetValue(bone, out NodeBuilder? found) ? found : node;
+				joints[i] = (joint, ToGltfMatrix(mesh.BindPose[i].CastToStruct()));
+			}
+			meshBuilder.Name = mesh.Name;
+			sceneBuilder.AddSkinnedMesh(meshBuilder, joints).WithName(node.Name); // skinned instances get their own node; keep the GameObject name
+		}
+		parameters.PendingSkinned.Clear();
+	}
+
+	/// <summary>Unity -> glTF for a transform matrix (row-vector System.Numerics form): mirror X on both sides.</summary>
+	private static Matrix4x4 ToGltfMatrix(Matrix4x4 unity)
+	{
+		Matrix4x4 mirror = Matrix4x4.CreateScale(GlbCoordinateConversion.CoordinateSpaceConversionScale);
+		return mirror * unity * mirror;
 	}
 
 	private static void AddDynamicMeshToScene(SceneBuilder sceneBuilder, BuildParameters parameters, NodeBuilder node, IMesh mesh, MeshData meshData, MaterialList materialList)
@@ -170,9 +225,11 @@ public static class GlbLevelBuilder
 		Dictionary<ITexture2D, MemoryImage> ImageCache,
 		Dictionary<IMaterial, MaterialBuilder> MaterialCache,
 		Dictionary<IMesh, MeshData> MeshCache,
-		bool IsScene)
+		bool IsScene,
+		Dictionary<ITransform, NodeBuilder> Nodes,
+		List<(NodeBuilder Node, ISkinnedMeshRenderer Renderer, IMesh Mesh, MeshData MeshData)> PendingSkinned)
 	{
-		public BuildParameters(bool isScene) : this(new MaterialBuilder("DefaultMaterial"), new(), new(), new(), isScene) { }
+		public BuildParameters(bool isScene) : this(new MaterialBuilder("DefaultMaterial"), new(), new(), new(), isScene, new(), new()) { }
 		public bool TryGetOrMakeMeshData(IMesh mesh, out MeshData meshData)
 		{
 			if (MeshCache.TryGetValue(mesh, out meshData))

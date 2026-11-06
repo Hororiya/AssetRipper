@@ -79,6 +79,7 @@ public class ExportHandler
 		yield return new InternalsVisibileToPublicKeyRemover();
 
 		// Asset processors
+		yield return new Processing.Endfield.EndfieldMeshProcessor();//Before anything reads vertex data
 		yield return new SceneDefinitionProcessor();
 		yield return new OriginalPathProcessor(Settings.ProcessingSettings.BundledAssetsExportMode);
 		yield return new MainAssetProcessor();

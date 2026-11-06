@@ -91,6 +91,25 @@ internal class VertexDataBlobTests
 		}
 	}
 
+	[Test]
+	[MatrixDataSource]
+	public async Task SkinIsPreserved([Matrix("2018.2", "2019.4", "2021.3.34f1")] string versionString, EndianType endianType)
+	{
+		MeshData triangle = MeshData.CreateTriangleMesh();
+		Numerics.BoneWeight4[] skin = new Numerics.BoneWeight4[triangle.Vertices.Length];
+		for (int i = 0; i < skin.Length; i++)
+		{
+			skin[i] = new Numerics.BoneWeight4(0.5f, 0.25f, 0.125f, 0.125f, i, i + 1, i + 2, 300 + i);
+		}
+		MeshData meshData = triangle with { Skin = skin };
+		UnityVersion version = UnityVersion.Parse(versionString);
+		MeshData meshData2 = VertexDataBlob.Create(meshData, version, endianType).ToMeshData();
+
+		await AssertEquivalence(meshData2.Vertices, meshData.Vertices);
+		await AssertEquivalence(meshData2.Normals, meshData.Normals);
+		await AssertEquivalence(meshData2.Skin, meshData.Skin);
+	}
+
 	private static async Task AssertEquivalence(
 		IEnumerable? actual,
 		IEnumerable? expected,

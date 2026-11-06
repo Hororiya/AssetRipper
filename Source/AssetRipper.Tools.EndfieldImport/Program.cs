@@ -42,11 +42,19 @@ internal static class Program
 	{
 		int maxErrors = 10;
 		string? valuesPath = null;
+		bool meshDiag = false;
+		bool process = false;
+		List<string> glbRoots = new();
+		string? glbOut = null;
 		List<string> paths = new();
 		for (int i = 0; i < args.Length; i++)
 		{
 			if (args[i] == "--errors") { maxErrors = int.Parse(args[++i]); }
 			else if (args[i] == "--values") { valuesPath = args[++i]; }
+			else if (args[i] == "--meshdiag") { meshDiag = true; }
+			else if (args[i] == "--process") { process = true; }
+			else if (args[i] == "--glb") { glbRoots.Add(args[++i]); }
+			else if (args[i] == "--glb-out") { glbOut = args[++i]; }
 			else { paths.Add(args[i]); }
 		}
 		CaptureLogger log = new();
@@ -54,7 +62,25 @@ internal static class Program
 		System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
 		using GameStructure structure = GameStructure.Load(paths, LocalFileSystem.Instance, new CoreConfiguration());
 		long ms = sw.ElapsedMilliseconds;
+		if (process || glbRoots.Count > 0)
+		{
+			AssetRipper.Processing.GameData gameData = AssetRipper.Processing.GameData.FromGameStructure(structure);
+			new AssetRipper.Processing.Endfield.EndfieldMeshProcessor().Process(gameData);
+			Console.WriteLine($"EndfieldMeshProcessor: rewrote {AssetRipper.Processing.Endfield.EndfieldMeshProcessor.Rewritten} meshes, {AssetRipper.Processing.Endfield.EndfieldMeshProcessor.Failed} failed");
+		}
 		IUnityObjectBase[] assets = structure.FileCollection.FetchAssets().ToArray();
+		if (glbRoots.Count > 0)
+		{
+			SkinDiag.Print(assets);
+			foreach (string rootName in glbRoots)
+			{
+				SkinTruth.Print(assets, rootName);
+			}
+		}
+		foreach (string rootName in glbRoots)
+		{
+			Glb.Export(assets, rootName, glbOut ?? ".");
+		}
 		Console.WriteLine($"loaded {assets.Length} objects from {structure.FileCollection.FetchAssetCollections().Count()} collections in {ms} ms; failed files {structure.FileCollection.FailedFiles.Count}; errors {log.Errors.Count}; warnings {log.Warnings}");
 		foreach (var g in assets.GroupBy(a => a.ClassID).OrderBy(g => g.Key))
 		{
@@ -72,6 +98,10 @@ internal static class Program
 				: "no extras")
 			.GroupBy(s => s).Select(g => $"{g.Key} x{g.Count()}");
 		Console.WriteLine("readable meshes by CollisionMeshOnly/Baked/Convex: " + string.Join(", ", meshFlags));
+		if (meshDiag)
+		{
+			MeshDiag.Print(assets);
+		}
 		if (valuesPath is not null)
 		{
 			File.WriteAllLines(valuesPath, assets.Select(Values.Describe).Where(s => s is not null).Order(StringComparer.Ordinal)!);

@@ -212,12 +212,33 @@ public readonly record struct VertexDataBlob(
 				{
 					if (meshData.HasSkin)
 					{
-						//todo
-
 						//kShaderChannelBlendWeight
-						channels.Add(CreateChannelInfoForFloatVector(0, 12, version));
+						channels.Add(CreateChannelInfoForFloatVector(4, 12, version));
+						foreach (BoneWeight4 boneWeight in meshData.Skin)
+						{
+							writer.Write(boneWeight.Weight0);
+							writer.Write(boneWeight.Weight1);
+							writer.Write(boneWeight.Weight2);
+							writer.Write(boneWeight.Weight3);
+						}
+						WriteAlignmentBytes(writer);
+
 						//kShaderChannelBlendIndices
-						channels.Add(CreateChannelInfoForFloatVector(0, 13, version));
+						channels.Add(new ChannelInfo()
+						{
+							Dimension = 4,
+							Offset = 0,
+							Format = (byte)MeshHelper.ToChannelFormat(MeshHelper.VertexFormat.kVertexFormatUInt32, version),
+							Stream = 13,
+						});
+						foreach (BoneWeight4 boneWeight in meshData.Skin)
+						{
+							writer.Write((uint)boneWeight.Index0);
+							writer.Write((uint)boneWeight.Index1);
+							writer.Write((uint)boneWeight.Index2);
+							writer.Write((uint)boneWeight.Index3);
+						}
+						WriteAlignmentBytes(writer);
 					}
 					else
 					{
